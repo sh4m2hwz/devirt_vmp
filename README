@@ -1,0 +1,2 @@
+unpack_vmp_handles.py - automation unpacker vmprotect handles, required dmp file contains EP of vmenter instruction
+deobfuscate_vmp_handler.py - automation extractor vmprotect single handler, required dmp file contains ep of handler
