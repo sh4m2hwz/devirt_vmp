@@ -261,14 +261,14 @@ class VmpAnalyzerX64:
             if insn.isSymbolized() and opcode == OPCODE.X86.MOV:
                 if ops[0].getType() == OPERAND.REG \
                 and ops[1].getType() == OPERAND.MEM \
-                and self.VSP in insn.getReadRegisters() \
+                and self.VSP in [e[0] for e in insn.getReadRegisters()] \
                 and not is_mov_reg_vsp_mem:
                     print("found 1")
                     taint_reg = ops[0]
                     is_mov_reg_vsp_mem = True
                 elif ops[0].getType() == OPERAND.REG \
                 and ops[1].getType() == OPERAND.MEM \
-                and self.VIP in insn.getReadRegisters() \
+                and self.VIP in [e[0] for e in insn.getReadRegisters()] \
                 and not is_mov_idx_vip:
                     print("found 2")
                     index_reg = ops[0]
