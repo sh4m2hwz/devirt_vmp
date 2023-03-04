@@ -104,6 +104,7 @@ class VmpAnalyzerX64:
         self.dp = None
         self.mu = None
         self.ctx = None
+        self.ctx_bytecode = None
         self.VIP = None
         self.VSP = None
         self.reg_pco = None
@@ -160,6 +161,14 @@ class VmpAnalyzerX64:
         else:
             return False
     #
+    def rebuildBasicBlock(self,bb):
+        pc = bb.getFirstAddress()
+        rebuilded = BasicBlock()
+        for e in bb.getInstructions():
+            rebuilded.add(Instruction(pc, e.getOpcode()))
+            pc+=e.getSize()
+        return rebuilded
+    #
     def analyze_vmenter(self):  
         for insn in self.bb_vmenter.getInstructions():
             if insn.getType() == OPCODE.X86.MOV:
@@ -173,7 +182,7 @@ class VmpAnalyzerX64:
                     if base != None and disp != None \
                     and base == self.ctx.registers.rsp and disp.getValue() == 0x90:
                         print("[+] found MOV reg, [RSP+90], calc VIP:",insn)
-                        self.VIP=op1
+                        self.VIP=self.ctx.getParentRegister(op1)
                         print("[*] mapped reg VIP is:",ops[0].getName())
             if insn.getType() == OPCODE.X86.MOV:
                 ops = insn.getOperands()
@@ -181,17 +190,17 @@ class VmpAnalyzerX64:
                 and ops[1].getType() == OPERAND.REG \
                 and ops[1] == self.ctx.registers.rsp:
                     print("[+] found MOV contains VSP:",insn)
-                    self.VSP=ops[0]
-                    self.VREGISTERS=ops[1]
+                    self.VSP=self.ctx.getParentRegister(ops[0])
+                    self.VREGISTERS=self.ctx.getParentRegister(ops[1])
                     print("[*] mapped reg VSP is:",ops[0].getName())
                     print("[*] mapped reg VREGISTERS is:",ops[1].getName())
             elif insn.getType() == OPCODE.X86.POP:
                 ops = insn.getOperands()
                 if ops[0].getType() == OPERAND.REG:
                     print("[+] found POP contains RKEY:",insn)
-                    self.RKEY = ops[0]
+                    self.RKEY = self.ctx.getParentRegister(ops[0])
             elif insn.getType() == OPCODE.X86.PUSH:
-                self.reg_pco = insn.getOperands()[0]
+                self.reg_pco = self.ctx.getParentRegister(insn.getOperands()[0])
             elif insn.getType() == OPCODE.X86.RET:
                 print("[+] found PUSH REG; RET pattern")
                 print("[+] reg pco (Path Constraint) is:",self.reg_pco.getName())
@@ -199,7 +208,7 @@ class VmpAnalyzerX64:
             elif insn.getType() == OPCODE.X86.JMP \
             and insn.getOperands()[0].getType() == OPERAND.REG:
                 print("[+] found JMP REG pattern")
-                self.reg_pco = insn.getOperands()[0]
+                self.reg_pco = self.ctx.getParentRegister(insn.getOperands()[0])
                 print("[+] reg pco (Path Contraint) is:",self.reg_pco.getName())
                 break
         if not self.reg_pco or not self.RKEY or not self.VSP \
@@ -248,6 +257,13 @@ class VmpAnalyzerX64:
     def find_VPUSHI64(self,bb):
         return False
     #
+    def build_VPOPQ_semantics(self,bb):
+        print("build ast for VPOPQ instruction")
+        rebuilded_bb = self.rebuildBasicBlock(bb)
+        simp_rebuilded_bb = self.ctx_bytecode.simplify(rebuilded_bb)
+        self.ctx_bytecode.processing(simp_rebuilded_bb)
+        print(simp_rebuilded_bb)
+    #
     def find_VPOPQ(self,bb):
         taint_reg = None
         index_reg = None
@@ -255,43 +271,45 @@ class VmpAnalyzerX64:
         is_add_vsp_8 = False
         is_mov_vregs_reg = False
         is_mov_idx_vip = False
+        bb_semantic = BasicBlock()
         for insn in bb.getInstructions():
-            opcode = insn.getOpcode()
+            opcode = insn.getType()
             ops = insn.getOperands()
-            if insn.isSymbolized() and opcode == OPCODE.X86.MOV:
+            if opcode == OPCODE.X86.MOV:
                 if ops[0].getType() == OPERAND.REG \
                 and ops[1].getType() == OPERAND.MEM \
-                and self.VSP in [e[0] for e in insn.getReadRegisters()] \
+                and self.VSP.getId() in [e[0].getId() for e in insn.getReadRegisters()] \
                 and not is_mov_reg_vsp_mem:
-                    print("found 1")
                     taint_reg = ops[0]
                     is_mov_reg_vsp_mem = True
-                elif ops[0].getType() == OPERAND.REG \
-                and ops[1].getType() == OPERAND.MEM \
-                and self.VIP in [e[0] for e in insn.getReadRegisters()] \
-                and not is_mov_idx_vip:
-                    print("found 2")
-                    index_reg = ops[0]
-                    is_mov_idx_vip = True
+                    bb_semantic.add(insn)
                 elif ops[0].getType() == OPERAND.MEM \
                 and ops[1].getType() == OPERAND.REG:
                     base = ops[0].getBaseRegister()
-                    index = ops[1].getIndexRegister()
-                    if base != None and index != None \
+                    index = ops[0].getIndexRegister()
+                    if base and index \
                     and base == self.VREGISTERS \
                     and index == index_reg \
-                    and ops[0] == taint_reg \
+                    and ops[1] == taint_reg \
                     and not is_mov_vregs_reg:
-                        print("found 3")
                         is_mov_vregs_reg = True
-            elif insn.isSymbolized() and opcode == OPCODE.X86.ADD \
+                        bb_semantic.add(insn)
+            if opcode == OPCODE.X86.MOVZX and ops[0].getType() == OPERAND.REG \
+            and ops[1].getType() == OPERAND.MEM \
+            and self.VIP.getId() in [e[0].getId() for e in insn.getReadRegisters()] \
+            and not is_mov_idx_vip:
+                index_reg = self.ctx.getParentRegister(ops[0])
+                is_mov_idx_vip = True
+                bb_semantic.add(insn)
+            elif insn and opcode == OPCODE.X86.ADD \
             and ops[0] == self.VSP and ops[1].getType() == OPERAND.IMM \
             and ops[1].getValue() == 0x08 and not is_add_vsp_8:
-                print("found 4")
                 is_add_vsp_8 = True
+                bb_semantic.add(insn)
         if is_mov_idx_vip and is_mov_vregs_reg and is_add_vsp_8 \
         and is_mov_reg_vsp_mem:
             print("[+] found VPOPQ handler")
+            self.build_VPOPQ_semantics(bb_semantic)
             return True
         return False
     #
@@ -358,6 +376,7 @@ class VmpAnalyzerX64:
                     self.is_find_vmenter = True
                     self.bb_vmenter = bb
                     self.analyze_vmenter()
+                    self.symbolizeRegistersBytecodeCtx()
             else:
                 is_vmswitch_or_vmexit = self.analyze_vmhandlers(bb)
                 if is_vmswitch_or_vmexit:
@@ -368,10 +387,18 @@ class VmpAnalyzerX64:
         print("[*] symbolizing all registers")
         for reg in ['rax','rcx','rdx','rbx','rsp','rbp','rsi','rdi','r8','r9','r10','r11','r12','r13','r14','r15','rip','eflags']:
             self.ctx.symbolizeRegister(self.ctx.getRegister(reg),reg)
+    def symbolizeRegistersBytecodeCtx(self):
+        self.ctx_bytecode.symbolizeRegister(self.VIP)
+        self.ctx_bytecode.symbolizeRegister(self.VSP)
+        self.ctx_bytecode.symbolizeRegister(self.VREGISTERS)
     #
     def __init_triton_dse(self):
         print("[*](triton dse) init ctx")
         self.ctx = TritonContext(ARCH.X86_64)
+        self.ctx_bytecode = TritonContext(ARCH.X86_64)
+        self.ctx_bytecode.setMode(MODE.ALIGNED_MEMORY, True)
+        self.ctx_bytecode.setMode(MODE.CONSTANT_FOLDING, True)
+        self.ctx_bytecode.setMode(MODE.AST_OPTIMIZATIONS, True)
         self.ctx.setMode(MODE.ALIGNED_MEMORY, True)
         self.ctx.setMode(MODE.CONSTANT_FOLDING, True)
         self.ctx.setMode(MODE.AST_OPTIMIZATIONS, True)
