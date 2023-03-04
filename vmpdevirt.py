@@ -241,8 +241,89 @@ class VmpAnalyzerX64:
     def analyze_vmexit(self,bb):
         pass
     #
+    def find_VPUSHRQ(self,bb):
+        return False
+    #
+    def find_VPUSHI64(self,bb):
+        return False
+    #
+    def find_VPOPQ(self,bb):
+        taint_reg = None
+        index_reg = None
+        is_mov_reg_vsp_mem = False
+        is_add_vsp_8 = False
+        is_mov_vregs_reg = False
+        is_mov_idx_vip = False
+        for insn in bb.getInstructions():
+            opcode = insn.getOpcode()
+            ops = insn.getOperands()
+            if insn.isSymbolized() and opcode == OPCODE.X86.MOV:
+                if ops[0].getType() == OPERAND.REG \
+                and ops[1].getType() == OPERAND.MEM \
+                and self.VSP in insn.getReadRegisters() \
+                and not is_mov_reg_vsp_mem:
+                    print("found 1")
+                    taint_reg = ops[0]
+                    is_mov_reg_vsp_mem = True
+                elif ops[0].getType() == OPERAND.REG \
+                and ops[1].getType() == OPERAND.MEM \
+                and self.VIP in insn.getReadRegisters() \
+                and not is_mov_idx_vip:
+                    print("found 2")
+                    index_reg = ops[0]
+                    is_mov_idx_vip = True
+                elif ops[0].getType() == OPERAND.MEM \
+                and ops[1].getType() == OPERAND.REG:
+                    base = ops[0].getBaseRegister()
+                    index = ops[1].getIndexRegister()
+                    if base != None and index != None \
+                    and base == self.VREGISTERS \
+                    and index == index_reg \
+                    and ops[0] == taint_reg \
+                    and not is_mov_vregs_reg:
+                        print("found 3")
+                        is_mov_vregs_reg = True
+            elif insn.isSymbolized() and opcode == OPCODE.X86.ADD \
+            and ops[0] == self.VSP and ops[1].getType() == OPERAND.IMM \
+            and ops[1].getValue() == 0x08 and not is_add_vsp_8:
+                print("found 4")
+                is_add_vsp_8 = True
+        if is_mov_idx_vip and is_mov_vregs_reg and is_add_vsp_8 \
+        and is_mov_reg_vsp_mem:
+            print("[+] found VPOPQ handler")
+            return True
+        return False
+    #
+    def find_VADDQ(self,bb):
+        return False
+    #
+    def find_VPUSHVSP(self,bb):
+        return False
+    #
+    def find_VANDNQ(self,bb):
+        return False
+    #
+    def find_VORNQ(self,bb):
+        return False
+    #
+    def find_MOVVSP(self,bb):
+        return False
+    #
     def analyze_vmops(self,bb):
-        pass
+        analyzers = [
+            self.find_VPUSHRQ,
+            self.find_VPUSHI64,
+            self.find_VPOPQ,
+            self.find_VADDQ,
+            self.find_VPUSHVSP,
+            self.find_VANDNQ,
+            self.find_VORNQ,
+            self.find_MOVVSP
+        ]
+        for analyzer in analyzers:
+            if analyzer(bb):
+                return True
+        return False
     #
     def analyze_vmhandlers(self,bb):
         print("[*] analyze vmp handler\n[*] simplification basicblock..")
@@ -260,7 +341,9 @@ class VmpAnalyzerX64:
             return True
         if self.analyze_vmexit(bb_simp):
             return True
-        self.analyze_vmops(bb_simp)
+        if not self.analyze_vmops(bb_simp):
+            print("[-] not found vmp handler, please append vmp template handler")
+            exit(1)
         return False
     #
     def analyze(self):
