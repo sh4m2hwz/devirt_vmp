@@ -207,6 +207,62 @@ class VmpAnalyzerX64:
             exit(1)
         print("[+] complete finishing analyzing vmenter handler")
     #
+    def analyze_vmswitch(self,bb):
+        is_mov_reg_vsp = False
+        is_mov_reg_mem_vsp = False
+        reg_VIP_inter = None
+        is_mov_new_vip = False
+        for insn in bb.getInstructions():
+            opcode = insn.getType()
+            ops = insn.getOperands()
+            if opcode == OPCODE.X86.MOV \
+            and ops[0].getType() == OPERAND.REG \
+            and ops[1].getType() == OPERAND.REG \
+            and ops[1] == self.VSP:
+                is_mov_reg_vsp = True
+            if opcode == OPCODE.X86.MOV \
+            and ops[0].getType() == OPERAND.REG \
+            and ops[1].getType() == OPERAND.MEM:
+                mem = ops[1]
+                base = mem.getBaseRegister()
+                if base != 0 and base == self.VSP:
+                    is_mov_reg_mem_vsp = True
+                    reg_VIP_inter = ops[0]
+            if opcode == OPCODE.X86.MOV \
+            and ops[0].getType() == OPERAND.REG \
+            and ops[1].getType() == OPERAND.REG:
+                if reg_VIP_inter != None and ops[1] == reg_VIP_inter:
+                    is_mov_new_vip = True
+        if is_mov_new_vip and is_mov_reg_mem_vsp and is_mov_new_vip:
+            print("[+] found vmswitch handler at address:",hex(bb.getFirstAddress()))
+            return True
+        return False
+    #
+    def analyze_vmexit(self,bb):
+        pass
+    #
+    def analyze_vmops(self,bb):
+        pass
+    #
+    def analyze_vmhandlers(self,bb):
+        print("[*] analyze vmp handler\n[*] simplification basicblock..")
+        bb_simp = self.ctx.simplify(bb)
+        bb_simp = BasicBlock(
+            [bb_simp.getInstructions()[-1]]
+            +
+            bb_simp.getInstructions()[:-1]
+        )
+        print("[+] simpplified handler:")
+        print(bb_simp)
+        print("[*] start classification handler..")
+        self.ctx.processing(bb_simp,bb.getFirstAddress())
+        if self.analyze_vmswitch(bb_simp):
+            return True
+        if self.analyze_vmexit(bb_simp):
+            return True
+        self.analyze_vmops(bb_simp)
+        return False
+    #
     def analyze(self):
         bb_entry = self.entry_point
         while True:
@@ -218,6 +274,9 @@ class VmpAnalyzerX64:
                     self.is_find_vmenter = True
                     self.bb_vmenter = bb
                     self.analyze_vmenter()
+            else:
+                is_vmswitch_or_vmexit = self.analyze_vmhandlers(bb)
+                if is_vmswitch_or_vmexit:
                     break
             bb_entry = self.getNextEntryBasicBlock()
     #
