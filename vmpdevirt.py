@@ -54,6 +54,7 @@ def get_target_addr_call(mu,op):
         scale = mu.reg_read(get_reg(op.getScaleIndex()))
         disp = op.getDisplacement().getValue()
         address = base+index*scale+disp
+        address = int.from_bytes(mu.mem_read(address,8), byteorder='little', signed=False)
     elif op.getType() == OPERAND.REG:
         address = mu.reg_read(get_reg(op))
     elif op.getType() == OPERAND.IMM:
