@@ -252,10 +252,10 @@ class VmpAnalyzerX64:
             +
             bb_simp.getInstructions()[:-1]
         )
+        self.ctx.processing(bb_simp,bb.getFirstAddress())
         print("[+] simpplified handler:")
         print(bb_simp)
         print("[*] start classification handler..")
-        self.ctx.processing(bb_simp,bb.getFirstAddress())
         if self.analyze_vmswitch(bb_simp):
             return True
         if self.analyze_vmexit(bb_simp):
