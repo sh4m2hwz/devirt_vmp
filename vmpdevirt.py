@@ -12,9 +12,7 @@ def check_in_region(vmp_range,address):
         return False
 
 def get_reg(ctx,reg):
-    if not reg:
-        return None
-    elif reg == ctx.registers.rax:
+    if reg == ctx.registers.rax:
         return UC_X86_REG_RAX
     elif reg == ctx.registers.rcx:
         return UC_X86_REG_RCX
@@ -44,46 +42,18 @@ def get_reg(ctx,reg):
         return UC_X86_REG_R13
     elif reg == ctx.registers.r14:
         return UC_X86_REG_R14
-    elif reg== ctx.registers.r15:
+    elif reg == ctx.registers.r15:
         return UC_X86_REG_R15
-
-def get_target_addr_call(mu,ctx,op):
-    if op.getType() == OPERAND.MEM:
-        base = get_reg(ctx,op.getBaseRegister())
-        if not base:
-            base = 0
-        else:
-            base = mu.reg_read(base)
-        index = get_reg(ctx,op.getIndexRegister())
-        if not index:
-            index = 0
-        else:
-            index = mu.reg_read(index)
-        scale = op.getScale()
-        if not scale:
-            scale = 1
-        else:
-            scale = scale.getValue()
-        disp = op.getDisplacement()
-        if not disp:
-            disp = 0
-        else:
-            disp = disp.getValue()
-        address = base+index*scale+disp
-        address = int.from_bytes(mu.mem_read(address,8), byteorder='little', signed=False)
-    elif op.getType() == OPERAND.REG:
-        address = mu.reg_read(get_reg(ctx,op))
-    elif op.getType() == OPERAND.IMM:
-        address = op.getValue()
+    elif reg == ctx.registers.rip:
+        return UC_X86_REG_RIP
     else:
-        print("cannot disassembly at address:",address)
-        exit(-1)
-    return address
+        return UC_X86_REG_INVALID
 
 is_stop = False
-
+is_call = False
 def hook_insn(mu, address, size, hook_ctx):
     global is_stop
+    global is_call
     if is_stop:
         is_stop = False
         mu.emu_stop()
@@ -93,16 +63,15 @@ def hook_insn(mu, address, size, hook_ctx):
     bb = hook_ctx['bb']
     insn = Instruction(address,bytes(mu.mem_read(address,size+1)))
     ctx.disassembly(insn)
-    if insn.getType() == OPCODE.X86.CALL:
-        bb.add(insn)
-        op = insn.getOperands()[0]
-        target_call_address = get_target_addr_call(mu,ctx,op)
-        if not check_in_region(vmp_range, target_call_address):
+    if is_call:
+        is_call = False
+        if not check_in_region(vmp_range, address):
             print("[+] found external call:",insn)
             mu.emu_stop()
             exit(-1)
-        else:
-            is_stop = True
+    if insn.getType() == OPCODE.X86.CALL:
+        is_call = True
+        #bb.add(insn)
     elif insn.getType() == OPCODE.X86.JMP \
     and insn.getOperands()[0].getType() == OPERAND.REG:
         bb.add(insn)
@@ -112,7 +81,6 @@ def hook_insn(mu, address, size, hook_ctx):
         is_stop = True
     elif not insn.isControlFlow():
         bb.add(insn)
-        
 
 class VmpAnalyzerX64:
     def __init__(self, filenamedump,vmp_segment_range={"start":0,"end":0}):
@@ -215,7 +183,7 @@ class VmpAnalyzerX64:
                 if ops[0].getType() == OPERAND.REG:
                     print("[+] found POP contains RKEY:",insn)
                     self.RKEY = self.ctx.getParentRegister(ops[0])
-            elif insn.getType() == OPCODE.X86.PUSH:
+            elif insn.getType() == OPCODE.X86.PUSH and insn.getOperands()[0].getType() == OPERAND.REG:
                 self.reg_pco = self.ctx.getParentRegister(insn.getOperands()[0])
             elif insn.getType() == OPCODE.X86.RET:
                 print("[+] found PUSH REG; RET pattern")
@@ -449,9 +417,172 @@ class VmpAnalyzerX64:
         return False
     #
     def find_VADDQ(self,bb):
+        bb_semantics = BasicBlock()
+        reg_a = None
+        reg_b = None
+        is_mov_a = False
+        is_mov_b = False
+        is_add_a_b = False
+        is_mov_res = False
+        is_pushfq = False
+        is_pop_VSP = False
+        is_add_VIP_4 = False
+        for insn in bb.getInstructions():
+            opcode = insn.getType()
+            ops = insn.getOperands()
+            if opcode == OPCODE.X86.ADD \
+            and ops[0] == self.VIP and \
+            ops[1].getType() == OPERAND.IMM \
+            and ops[1].getValue() == 0x04:
+                is_add_VIP_4 = True
+                bb_semantics.add(insn)
+            if opcode == OPCODE.X86.SUB \
+            and ops[0] == self.VIP and \
+            ops[1].getType() == OPERAND.IMM \
+            and ops[1].getValue() == 0x04:
+                is_add_VIP_4 = True
+                bb_semantics.add(insn)
+            if opcode == OPCODE.X86.MOV \
+            and ops[0].getType() == OPERAND.REG \
+            and ops[1].getType() == OPERAND.MEM \
+            and ops[1].getBaseRegister() == self.VSP:
+                disp = ops[1].getDisplacement()
+                if not disp or disp.getValue() == 0:
+                    is_mov_a = True
+                    reg_a = ops[0]
+                else:
+                    is_mov_b = True
+                    reg_b = ops[0]
+                bb_semantics.add(insn)
+            if opcode == OPCODE.X86.MOV \
+            and ops[0].getType() == OPERAND.MEM \
+            and ops[1].getType() == OPERAND.REG \
+            and ops[0].getBaseRegister() == self.VSP \
+            and ops[0].getDisplacement() \
+            and ops[0].getDisplacement().getValue() == 0x08 \
+            and (ops[1] == reg_a or ops[1] == reg_b):
+                is_mov_res = True
+                bb_semantics.add(insn)
+            if opcode == OPCODE.X86.ADD \
+            and ops[0].getType() == OPERAND.REG \
+            and ops[1].getType() == OPERAND.REG \
+            and reg_a in [e[0] for e in insn.getReadRegisters()] \
+            and reg_b in [e[0] for e in insn.getReadRegisters()]:
+                is_add_a_b = True
+                bb_semantics.add(insn)
+            if opcode == OPCODE.X86.PUSHFQ:
+                is_pushfq = True
+                bb_semantics.add(insn)
+            if opcode == OPCODE.X86.POP \
+            and ops[0].getType() == OPERAND.MEM \
+            and ops[0].getBaseRegister() == self.VSP:
+                is_pop_VSP = True
+                bb_semantics.add(insn)
+        if is_pop_VSP and is_pushfq and is_add_a_b and is_mov_res \
+        and is_mov_b and is_mov_a:
+            print("[+] found VADDQ handler")
+            self.build_semantics(bb_semantics)
+            return True
+        return False
+    #
+    def find_VLOADQ(self,bb):
+        reg_ptr = None
+        reg_val = None
+        is_mov_reg_ptr_vsp = False
+        is_mov_val_reg_ptr = False
+        is_mov_vsp_val = False
+        is_add_vip_4 = False
+        bb_semantics = BasicBlock()
+        for insn in bb.getInstructions():
+            opcode = insn.getType()
+            ops = insn.getOperands()
+            if opcode == OPCODE.X86.MOV \
+            and ops[0].getType() == OPERAND.REG \
+            and ops[1].getType() == OPERAND.MEM \
+            and ops[1].getBaseRegister() == self.VSP:
+                is_mov_reg_ptr_vsp = True
+                reg_ptr = ops[0]
+                bb_semantics.add(insn)
+            if opcode == OPCODE.X86.MOV \
+            and ops[0].getType() == OPERAND.REG \
+            and ops[1].getType() == OPERAND.MEM \
+            and ops[1].getBaseRegister() == reg_ptr:
+                is_mov_val_reg_ptr = True
+                reg_val = ops[0]
+                bb_semantics.add(insn)
+            if opcode == OPCODE.X86.MOV \
+            and ops[0].getType() == OPERAND.MEM \
+            and ops[1].getType() == OPERAND.REG \
+            and ops[0].getBaseRegister() == self.VSP \
+            and ops[1] == reg_val:
+                is_mov_vsp_val = True
+                bb_semantics.add(insn)
+            if opcode == OPCODE.X86.ADD \
+            and ops[0] == self.VIP \
+            and ops[1].getType() == OPERAND.IMM \
+            and ops[1].getValue() == 0x04:
+                is_add_vip_4 = True
+                bb_semantics.add(insn)
+            if opcode == OPCODE.X86.SUB \
+            and ops[0] == self.VIP \
+            and ops[1].getType() == OPERAND.IMM \
+            and ops[1].getValue() == 0x04:
+                is_add_vip_4 = True
+                bb_semantics.add(insn)       
+        if is_add_vip_4 and is_mov_vsp_val \
+        and is_mov_val_reg_ptr and is_mov_reg_ptr_vsp:
+            print("[+] found VLOADQ handler")
+            self.build_semantics(bb_semantics)
+            return True
         return False
     #
     def find_VPUSHVSP(self,bb):
+        vsp_val_reg = None
+        is_mov_vsp_val_reg = False
+        is_sub_vsp_8 = False
+        is_mov_vsp_vsp_val_reg = False
+        is_add_vip_4 = False
+        bb_semantics = BasicBlock()
+        for insn in bb.getInstructions():
+            opcode = insn.getType()
+            ops = insn.getOperands()
+            if opcode == OPCODE.X86.MOV \
+            and ops[0].getType() == OPERAND.REG \
+            and ops[1].getType() == OPERAND.REG \
+            and ops[1] == self.VSP:
+                vsp_val_reg = ops[0]
+                is_mov_vsp_val_reg = True
+                bb_semantics.add(insn)
+            if opcode == OPCODE.X86.SUB \
+            and ops[0] == self.VSP \
+            and ops[1].getType() == OPERAND.IMM \
+            and ops[1].getValue() == 0x08:
+                is_sub_vsp_8 = True
+                bb_semantics.add(insn)
+            if opcode == OPCODE.X86.MOV \
+            and ops[0].getType() == OPERAND.MEM \
+            and ops[1].getType() == OPERAND.REG \
+            and ops[0].getBaseRegister() == self.VSP \
+            and ops[1] == vsp_val_reg:
+                is_mov_vsp_vsp_val_reg = True
+                bb_semantics.add(insn)
+            if opcode == OPCODE.X86.ADD \
+            and ops[0] == self.VIP \
+            and ops[1].getType() == OPERAND.IMM \
+            and ops[1].getValue() == 0x04:
+                is_add_vip_4 = True
+                bb_semantics.add(insn)
+            if opcode == OPCODE.X86.SUB \
+            and ops[0] == self.VIP \
+            and ops[1].getType() == OPERAND.IMM \
+            and ops[1].getValue() == 0x04:
+                is_add_vip_4 = True
+                bb_semantics.add(insn)
+        if is_add_vip_4 and is_sub_vsp_8 and is_mov_vsp_vsp_val_reg \
+        and is_mov_vsp_val_reg:
+            print("[+] found VPUSHVSP handler")
+            self.build_semantics(bb_semantics)
+            return True
         return False
     #
     def find_VANDNQ(self,bb):
@@ -469,6 +600,7 @@ class VmpAnalyzerX64:
             self.find_VPUSHI64,
             self.find_VPOPQ,
             self.find_VADDQ,
+            self.find_VLOADQ,
             self.find_VPUSHVSP,
             self.find_VANDNQ,
             self.find_VORNQ,
