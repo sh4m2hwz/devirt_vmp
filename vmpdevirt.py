@@ -251,13 +251,70 @@ class VmpAnalyzerX64:
     def build_semantics(self,bb):
         print("build ast for vmp instruction")
         rebuilded_bb = self.rebuildBasicBlock(bb)
-        self.ctx_bytecode.processing(rebuilded_bb)
+        self.ctx_bytecode.processing(rebuilded_bb,rebuilded_bb.getFirstAddress())
         print(rebuilded_bb)
     #
     def analyze_vmexit(self,bb):
         pass
     #
     def find_VPUSHRQ(self,bb):
+        index_reg = None
+        val_reg = None
+        bb_semantic = BasicBlock()
+        is_mov_idx_reg_vip = False
+        is_add_vip_1 = False
+        is_mov_val_vregs_idx = False
+        is_sub_vsp_8 = False
+        is_mov_vsp_val = False
+        for insn in bb.getInstructions():
+            opcode = insn.getType()
+            ops = insn.getOperands()
+            if opcode == OPCODE.X86.MOVZX \
+            and ops[0].getType() == OPERAND.REG \
+            and ops[1].getType() == OPERAND.MEM \
+            and self.VIP.getId() in [e[0].getId() for e in insn.getReadRegisters()] \
+            and not is_mov_idx_reg_vip:
+                is_mov_idx_reg_vip = True
+                index_reg = self.ctx.getParentRegister(ops[0])
+                bb_semantic.add(insn)
+            elif opcode == OPCODE.X86.ADD \
+            and ops[0].getType() == OPERAND.REG \
+            and ops[1].getType() == OPERAND.IMM \
+            and ops[1].getValue() == 0x01 \
+            and ops[0] == self.VIP \
+            and not is_add_vip_1:
+                is_add_vip_1 = True
+                bb_semantic.add(insn)
+            elif opcode == OPCODE.X86.MOV \
+            and ops[0].getType() == OPERAND.REG \
+            and ops[1].getType() == OPERAND.MEM \
+            and ops[1].getBaseRegister() == self.VREGISTERS \
+            and ops[1].getIndexRegister() == index_reg \
+            and not is_mov_val_vregs_idx:
+                val_reg = ops[0]
+                is_mov_val_vregs_idx = True
+                bb_semantic.add(insn)
+            elif opcode == OPCODE.X86.SUB \
+            and ops[0].getType() == OPERAND.REG \
+            and ops[0] == self.VSP \
+            and ops[1].getType() == OPERAND.IMM \
+            and ops[1].getValue() == 0x08 \
+            and not is_sub_vsp_8:
+                is_sub_vsp_8 = True
+                bb_semantic.add(insn)
+            elif opcode == OPCODE.X86.MOV \
+            and ops[0].getType() == OPERAND.MEM \
+            and ops[1].getType() == OPERAND.REG \
+            and ops[0].getBaseRegister() == self.VSP \
+            and ops[1] == val_reg and not is_mov_vsp_val:
+                is_mov_vsp_val = True
+                bb_semantic.add(insn)
+        if is_mov_vsp_val and is_sub_vsp_8 \
+        and is_mov_val_vregs_idx and is_add_vip_1 \
+        and is_mov_idx_reg_vip:
+            print("[+] found VPUSHRQ handler")
+            self.build_semantics(bb_semantic)
+            return True
         return False
     #
     def find_VPUSHI64(self,bb):
@@ -308,6 +365,7 @@ class VmpAnalyzerX64:
         is_mov_reg_vsp_mem = False
         is_add_vsp_8 = False
         is_mov_vregs_reg = False
+        is_add_vip_1 = False
         is_mov_idx_vip = False
         bb_semantic = BasicBlock()
         for insn in bb.getInstructions():
@@ -339,13 +397,18 @@ class VmpAnalyzerX64:
                 index_reg = self.ctx.getParentRegister(ops[0])
                 is_mov_idx_vip = True
                 bb_semantic.add(insn)
-            elif insn and opcode == OPCODE.X86.ADD \
+            elif opcode == OPCODE.X86.ADD \
             and ops[0] == self.VSP and ops[1].getType() == OPERAND.IMM \
             and ops[1].getValue() == 0x08 and not is_add_vsp_8:
                 is_add_vsp_8 = True
                 bb_semantic.add(insn)
+            if opcode == OPCODE.X86.ADD \
+            and ops[0] == self.VIP and ops[1].getType() == OPERAND.IMM \
+            and ops[1].getValue() == 0x01 and not is_add_vip_1:
+                is_add_vip_1 = True
+                bb_semantic.add(insn)
         if is_mov_idx_vip and is_mov_vregs_reg and is_add_vsp_8 \
-        and is_mov_reg_vsp_mem:
+        and is_mov_reg_vsp_mem and is_add_vip_1:
             print("[+] found VPOPQ handler")
             self.build_semantics(bb_semantic)
             return True
