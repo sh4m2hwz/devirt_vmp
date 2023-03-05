@@ -59,7 +59,11 @@ def get_target_addr_call(mu,ctx,op):
             index = 0
         else:
             index = mu.reg_read(index)
-        scale = op.getScaleIndex()
+        scale = op.getScale()
+        if not scale:
+            scale = 1
+        else:
+            scale = scale.getValue()
         disp = op.getDisplacement()
         if not disp:
             disp = 0
