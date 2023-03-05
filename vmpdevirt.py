@@ -13,7 +13,7 @@ def check_in_region(vmp_range,address):
 
 def get_reg(ctx,reg):
     if not reg:
-        return 0
+        return None
     elif reg == ctx.registers.rax:
         return UC_X86_REG_RAX
     elif reg == ctx.registers.rcx:
@@ -49,10 +49,22 @@ def get_reg(ctx,reg):
 
 def get_target_addr_call(mu,ctx,op):
     if op.getType() == OPERAND.MEM:
-        base = mu.reg_read(get_reg(ctx,op.getBaseRegister()))
-        index = mu.reg_read(get_reg(ctx,op.getIndexRegister()))
-        scale = mu.reg_read(get_reg(ctx,op.getScaleIndex()))
-        disp = op.getDisplacement().getValue()
+        base = get_reg(ctx,op.getBaseRegister())
+        if not base:
+            base = 0
+        else:
+            base = mu.reg_read(base)
+        index = get_reg(ctx,op.getIndexRegister())
+        if not index:
+            index = 0
+        else:
+            index = mu.reg_read(index)
+        scale = op.getScaleIndex()
+        disp = op.getDisplacement()
+        if not disp:
+            disp = 0
+        else:
+            disp = disp.getValue()
         address = base+index*scale+disp
         address = int.from_bytes(mu.mem_read(address,8), byteorder='little', signed=False)
     elif op.getType() == OPERAND.REG:
