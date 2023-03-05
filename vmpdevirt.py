@@ -285,6 +285,14 @@ class VmpAnalyzerX64:
             and not is_add_vip_1:
                 is_add_vip_1 = True
                 bb_semantic.add(insn)
+            elif opcode == OPCODE.X86.SUB \
+            and ops[0].getType() == OPERAND.REG \
+            and ops[1].getType() == OPERAND.IMM \
+            and ops[1].getValue() == 0x01 \
+            and ops[0] == self.VIP \
+            and not is_add_vip_1:
+                is_add_vip_1 = True
+                bb_semantic.add(insn)
             elif opcode == OPCODE.X86.MOV \
             and ops[0].getType() == OPERAND.REG \
             and ops[1].getType() == OPERAND.MEM \
@@ -349,6 +357,11 @@ class VmpAnalyzerX64:
                 is_add_VIP_8 = True
                 bb_semantic.add(insn)
             elif opcode == OPCODE.X86.SUB \
+            and ops[0] == self.VIP and ops[1].getType() == OPERAND.IMM \
+            and ops[1].getValue() == 0x08 and not is_add_VIP_8:
+                is_add_VIP_8 = True
+                bb_semantic.add(insn)
+            elif opcode == OPCODE.X86.SUB \
             and ops[0] == self.VSP and ops[1].getType() == OPERAND.IMM \
             and ops[1].getValue() == 0x08 and not is_sub_VSP_8:
                 is_sub_VSP_8 = True
@@ -403,6 +416,11 @@ class VmpAnalyzerX64:
                 is_add_vsp_8 = True
                 bb_semantic.add(insn)
             if opcode == OPCODE.X86.ADD \
+            and ops[0] == self.VIP and ops[1].getType() == OPERAND.IMM \
+            and ops[1].getValue() == 0x01 and not is_add_vip_1:
+                is_add_vip_1 = True
+                bb_semantic.add(insn)
+            if opcode == OPCODE.X86.SUB \
             and ops[0] == self.VIP and ops[1].getType() == OPERAND.IMM \
             and ops[1].getValue() == 0x01 and not is_add_vip_1:
                 is_add_vip_1 = True
