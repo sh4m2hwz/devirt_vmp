@@ -11,7 +11,7 @@ def check_in_region(vmp_range,address):
     else:
         return False
 
-def get_reg(reg):
+def get_reg(ctx,reg):
     if not reg:
         return 0
     elif reg == ctx.registers.rax:
@@ -47,16 +47,16 @@ def get_reg(reg):
     elif reg== ctx.registers.r15:
         return UC_X86_REG_R15
 
-def get_target_addr_call(mu,op):
+def get_target_addr_call(mu,ctx,op):
     if op.getType() == OPERAND.MEM:
-        base = mu.reg_read(get_reg(op.getBaseRegister()))
-        index = mu.reg_read(get_reg(op.getIndexRegister()))
-        scale = mu.reg_read(get_reg(op.getScaleIndex()))
+        base = mu.reg_read(get_reg(ctx,op.getBaseRegister()))
+        index = mu.reg_read(get_reg(ctx,op.getIndexRegister()))
+        scale = mu.reg_read(get_reg(ctx,op.getScaleIndex()))
         disp = op.getDisplacement().getValue()
         address = base+index*scale+disp
         address = int.from_bytes(mu.mem_read(address,8), byteorder='little', signed=False)
     elif op.getType() == OPERAND.REG:
-        address = mu.reg_read(get_reg(op))
+        address = mu.reg_read(get_reg(ctx,op))
     elif op.getType() == OPERAND.IMM:
         address = op.getValue()
     else:
@@ -80,7 +80,7 @@ def hook_insn(mu, address, size, hook_ctx):
     if insn.getType() == OPCODE.X86.CALL:
         bb.add(insn)
         op = insn.getOperands()[0]
-        target_call_address = get_target_addr_call(mu,op)
+        target_call_address = get_target_addr_call(mu,ctx,op)
         if not check_in_region(vmp_range, target_call_address):
             print("[+] found external call:",insn)
             mu.emu_stop()
