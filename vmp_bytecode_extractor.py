@@ -153,9 +153,12 @@ class VmpAnalyzerX64:
     def find_vmenter(self, bb):
         astctx = self.ctx.getAstContext()
         saved_regs = []
+        attach_address = 0
         for insn in bb.getInstructions():
             if len(saved_regs) == 16:
                 print("[+] found vmenter at address: ",hex(bb.getFirstAddress()))
+                attach_address = bb.getInstructions()[0].getAddress()
+                self.fetch_values['VMENTER'].append(attach_address)
                 return True
             elif insn.isSymbolized() and insn.getType() == OPCODE.X86.PUSHFQ:
                 if "eflags" in saved_regs:
@@ -167,6 +170,8 @@ class VmpAnalyzerX64:
                     continue
                 saved_regs.append(reg.getName())
         if len(saved_regs) == 16:
+            attach_address = bb.getInstructions()[0].getAddress()
+            self.fetch_values['VMENTER'].append(attach_address)
             print("[+] found vmenter at address: ",hex(bb.getFirstAddress()))
             return True
         else:
@@ -181,7 +186,6 @@ class VmpAnalyzerX64:
         return rebuilded
     #
     def analyze_vmenter(self):
-        attach_address = 0  
         for insn in self.bb_vmenter.getInstructions():
             if insn.getType() == OPCODE.X86.MOV:
                 ops = insn.getOperands()
@@ -193,7 +197,6 @@ class VmpAnalyzerX64:
                     disp = op2.getDisplacement()
                     if base != None and disp != None \
                     and base == self.ctx.registers.rsp and disp.getValue() == 0x90:
-                        attach_address = insn.getAddress()
                         print("[+] found MOV reg, [RSP+90], calc VIP:",insn)
                         self.VIP=self.ctx.getParentRegister(op1)
                         print("[*] mapped reg VIP is:",ops[0].getName())
@@ -228,7 +231,6 @@ class VmpAnalyzerX64:
         or not self.VREGISTERS or not self.VIP:
             print("[-] this devirtualizer support vmprotect 3.6.x, different version")
             exit(1)
-        self.fetch_values['VMENTER'].append(attach_address)
         print("[+] complete finishing analyzing vmenter handler")
     #
     def analyze_vmswitch(self,bb):
@@ -1079,7 +1081,6 @@ class VmpExtractorX64(VmpAnalyzerX64):
                 l.pop(i)
                 break
         return True
-    #
     def gen_imm64(self,imm64):
         self.vmp_bytecode+=int.to_bytes(imm64,8,byteorder='little')
     def gen_opcode(self,opcode):
@@ -1183,3 +1184,15 @@ class VmpExtractorX64(VmpAnalyzerX64):
 
 vmp = VmpExtractorX64('hdl.dmp',{'start':0,'end':0xFFFFFFFFFFFFFFFF})
 vmp_bytecode = vmp.extract_bytecode()
+vmp_bytecode = b'\n\x06 \x06\x88\x060\x06\xa8\x06@\x06\xb8\x068\x06\x00\x06\x80\x06\x08\x06\x10\x06\x10\x00\xa2\x1a\x90@\x01\x00\x00\x00\x01\xb0\x06h\x05\x07\x06\x98\x07\x01\x80\x01\xb8\x06\xd8\x018\x06\xe0\x01\x90\x06\xe8\x01\x80\x06\xc8\x00\xae\x88-\xe1\xca\xff\x8et\x00\xaa\x1a\x90@\x01\x00\x00\x00\x07\x06\x10\x05\x07\x06h\x06`\x00\xefa\x18D\xa9\x16\xa2\x15\x01\xb0\x07\x05\x07\x00\xa9\x8f4%\xa7\xf8\x99I\x00\xba\x1a\x90@\x01\x00\x00\x00\x01\xb0\x05\x07\x06\x80\x06H\x00\xc2\x1a\x90@\x01\x00\x00\x00\x01\xb0\x06`\x05\x07\x06\x10\x07\x06H\x08\x06\x80\x07\x06\x10\x04\t\x03\x01\x10\t\x00\xfe\xcd#\x18\x14\xa1\x80\x8d\x01\xb0\x07\x05\x06`\x06`\x01H\x00[7\x16\xbdwH\xac\xec\x00\xd2\x1a\x90@\x01\x00\x00\x00\x01\xb0\x07\x06P\x05\x07\x06P\x08\x06\x98\x04\t\x06`\x06P\x00^Z{\x1c{\xa6\xab\xc1\x00\xda\x1a\x90@\x01\x00\x00\x00\x01\xb0\x07\x05\x01\xb0\x00\xe2\x1a\x90@\x01\x00\x00\x00\x07\x06\x10\x05\x07\x06\x98\x01\xb0\x07\x06P\x06\xc8\x01h\x06\xd0\x01\xb8\x06\xd8\x018\x06\xe0\x01\x18\x01\x98\x01\x08\x01h\x01x\x01@\x018\x01\xa8\x01\x18\x01\x88\x01\xb8\x01\x90\x010\x01X\x01\x00\x01\xb0\x01\x98\x0b'
+from miasm.analysis.machine import Machine
+from miasm.core.locationdb import LocationDB
+from miasm.analysis.simplifier import IRCFGSimplifierCommon,IRCFGSimplifierSSA
+machine = Machine("vmp")
+loc_db = LocationDB()
+mdis = machine.dis_engine(vmp_bytecode,loc_db=loc_db)
+asmcfg = mdis.dis_multiblock(0)
+lifter = machine.lifter_model_call(loc_db)
+ircfg = lifter.new_ircfg_from_asmcfg(asmcfg)
+simplifier = IRCFGSimplifierCommon(lifter)
+simplifier.simplify(ircfg,ircfg.heads()[0])
