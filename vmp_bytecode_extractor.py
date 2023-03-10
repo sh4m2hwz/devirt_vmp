@@ -108,6 +108,10 @@ class VmpAnalyzerX64:
         self.mu.hook_add(UC_HOOK_CODE,hook_insn,self.hook_ctx)
         self.entry_point = self.dp.regs.rip
         self.fetch_values = {
+            "VRDTSC": [],
+            "VPOPB": [],
+            "VHADDB": [],
+            "VPOPW": [],
             "VSHRQ": [],
             "VPUSHI64" : [],
             "VPUSHI32": [],
@@ -1185,8 +1189,163 @@ class VmpAnalyzerX64:
             return True
         return False 
     #
+    def find_VPOPW(self,bb):
+        attach_address = 0
+        val = None
+        is_mov_val_vsp =False
+        is_add_vsp_9 = False
+        is_mov_vregs_idx_val = False
+        for insn in bb.getInstructions():
+            opcode = insn.getType()
+            ops = insn.getOperands()
+            if opcode == OPCODE.X86.MOV \
+            and ops[0].getType() == OPERAND.REG \
+            and ops[0].getBitSize() == 16 \
+            and ops[1].getType() == OPERAND.MEM \
+            and ops[1].getBaseRegister() == self.VSP:
+                val = ops[0]
+                is_mov_val_vsp = True
+            if opcode == OPCODE.X86.ADD \
+            and ops[0] == self.VSP \
+            and ops[1].getType() == OPERAND.IMM \
+            and ops[1].getValue() == 0x02:
+                is_add_vsp_9 = True
+            if opcode == OPCODE.X86.MOV \
+            and ops[0].getType() == OPERAND.MEM \
+            and ops[1].getType() == OPERAND.REG \
+            and ops[0].getBaseRegister() == self.VREGISTERS \
+            and ops[0].getIndexRegister() != None \
+            and ops[1].getBitSize() == 16 \
+            and ops[1] == val:
+                is_mov_vregs_idx_val = True
+                attach_address = insn.getAddress()
+        if is_mov_vregs_idx_val and is_add_vsp_9 and is_mov_val_vsp:
+            self.fetch_values['VPOPW'].append(attach_address)
+            return True
+        return False
+    #
+    def find_VHADDB(self,bb):
+        res = None
+        is_sub_vsp_6 = False
+        is_add_bb = False
+        is_mov_vsp_8_res = False
+        is_pushfq = False
+        is_pop_vsp = False
+        attach_address = bb.getInstructions()[0].getAddress()
+        for insn in bb.getInstructions():
+            opcode = insn.getType()
+            ops = insn.getOperands()
+            if opcode == OPCODE.X86.SUB \
+            and ops[0] == self.VSP \
+            and ops[1].getType() == OPERAND.IMM \
+            and ops[1].getValue() == 0x06:
+                is_sub_vsp_6 = True
+            if opcode == OPCODE.X86.ADD \
+            and ops[0].getType() == OPERAND.REG \
+            and ops[1].getType() == OPERAND.REG \
+            and ops[0].getBitSize() == 8 \
+            and ops[1].getBitSize() == 8:
+                res = self.ctx.getParentRegister(ops[0])
+                is_add_bb = True
+            if opcode == OPCODE.X86.MOV \
+            and ops[0].getType() == OPERAND.MEM \
+            and ops[1].getType() == OPERAND.REG \
+            and ops[0].getBaseRegister() == self.VSP \
+            and ops[0].getDisplacement().getValue() == 0x08 \
+            and ops[1].getBitSize() == 16 \
+            and self.ctx.getParentRegister(ops[1]) == res:
+                is_mov_vsp_8_res = True
+            if opcode == OPCODE.X86.PUSHFQ:
+                is_pushfq = True
+            if opcode == OPCODE.X86.POP \
+            and ops[0].getType() == OPERAND.MEM \
+            and ops[0].getBaseRegister() == self.VSP:
+                is_pop_vsp = True
+        if is_pop_vsp and is_pushfq and is_mov_vsp_8_res \
+        and is_add_bb and is_sub_vsp_6:
+            self.fetch_values['VHADDB'].append(attach_address)
+            return True
+        return False
+    #
+    def find_VPOPB(self,bb):
+        val = None
+        is_mov_val_vsp = False
+        is_add_vsp_2 = False
+        is_mov_vregs_idx_val = False
+        attach_address = 0
+        for insn in bb.getInstructions():
+            opcode = insn.getType()
+            ops = insn.getOperands()
+            if opcode == OPCODE.X86.MOV \
+            and ops[0].getType() == OPERAND.REG \
+            and ops[1].getType() == OPERAND.MEM \
+            and ops[1].getBaseRegister() == self.VSP \
+            and ops[0].getBitSize() == 16:
+                val = self.ctx.getParentRegister(ops[0])
+                is_mov_val_vsp = True
+            if opcode == OPCODE.X86.ADD \
+            and ops[0] == self.VSP \
+            and ops[1].getType() == OPERAND.IMM \
+            and ops[1].getValue() == 0x02:
+                is_add_vsp_2 = True
+            if opcode == OPCODE.X86.MOV \
+            and ops[0].getType() == OPERAND.MEM \
+            and ops[1].getType() == OPERAND.REG \
+            and ops[0].getBaseRegister() == self.VREGISTERS \
+            and ops[0].getIndexRegister() != None \
+            and ops[1].getBitSize() == 8 \
+            and self.ctx.getParentRegister(ops[1]) == val:
+                is_mov_vregs_idx_val = True
+                attach_address = insn.getAddress()
+        if is_mov_vregs_idx_val and is_add_vsp_2 \
+        and is_mov_val_vsp:
+            self.fetch_values['VPOPB'].append(attach_address)
+            return True
+        return False
+    #
+    def find_VRDTSC(self,bb):
+        is_rdtsc = False
+        is_mov_vsp_edx = False
+        is_mov_vsp_4_eax = False
+        is_sub_vsp_8 = False
+        attach_address = bb.getInstructions()[0].getAddress()
+        for insn in bb.getInstructions():
+            opcode = insn.getType()
+            ops = insn.getOperands()
+            if opcode == OPCODE.X86.RDTSC:
+                is_rdtsc = True
+            if opcode == OPCODE.X86.SUB \
+            and ops[0] == self.VSP \
+            and ops[1].getType() == OPERAND.IMM \
+            and ops[1].getValue() == 0x08:
+               is_sub_vsp_8 = True 
+            if opcode == OPCODE.X86.MOV \
+            and ops[0].getType() == OPERAND.MEM \
+            and ops[0].getBaseRegister() == self.VSP \
+            and ops[0].getDisplacement().getValue() == 0 \
+            and ops[1].getType() == OPERAND.REG \
+            and ops[1].getBitSize() == 32 \
+            and ops[1] == self.ctx.registers.edx:
+                is_mov_vsp_edx = True
+            if opcode == OPCODE.X86.MOV \
+            and ops[0].getType() == OPERAND.MEM \
+            and ops[0].getBaseRegister() == self.VSP \
+            and ops[0].getDisplacement().getValue() == 4 \
+            and ops[1].getType() == OPERAND.REG \
+            and ops[1].getBitSize() == 32 \
+            and ops[1] == self.ctx.registers.eax:
+                is_mov_vsp_4_eax = True
+        if is_sub_vsp_8 and is_mov_vsp_4_eax and is_mov_vsp_edx and is_rdtsc:
+            self.fetch_values['VRDTSC'].append(attach_address)
+            return True
+        return False
+    #
     def analyze_vmops(self,bb):
         analyzers = [
+            self.find_VRDTSC,
+            self.find_VPOPB,
+            self.find_VHADDB,
+            self.find_VPOPW,
             self.find_VPUSHRQ,
             self.find_VSHRQ,
             self.find_VPUSHI64,
