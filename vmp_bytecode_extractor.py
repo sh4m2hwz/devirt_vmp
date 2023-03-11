@@ -108,6 +108,8 @@ class VmpAnalyzerX64:
         self.mu.hook_add(UC_HOOK_CODE,hook_insn,self.hook_ctx)
         self.entry_point = self.dp.regs.rip
         self.fetch_values = {
+            "VMULD": [],
+            "VDIVD": [],
             "VRDTSC": [],
             "VPOPB": [],
             "VHADDB": [],
@@ -1303,6 +1305,76 @@ class VmpAnalyzerX64:
             return True
         return False
     #
+    def find_VDIVD(self,bb):
+        is_mov_low_vsp_4 = False
+        is_mov_high_vsp = False
+        is_mov_del_vsp_8 = False
+        is_sub_vsp_4 = False
+        is_div_del = False
+        is_mov_vsp_8 = False
+        is_mov_vsp_0xc = False
+        is_pushfq = False
+        is_pop_vsp = False
+        deliter = False
+        attach_address = bb.getInstructions()[0].getAddress()
+        for insn in bb.getInstructions():
+            opcode = insn.getType()
+            ops = insn.getOperands()
+            if opcode == OPCODE.X86.MOV \
+            and ops[0] == self.ctx.registers.eax \
+            and ops[1].getType() == OPERAND.MEM \
+            and ops[1].getBaseRegister() == self.VSP \
+            and ops[1].getDisplacement().getValue() == 0x04:
+                is_mov_low_vsp_4 = True
+            if opcode == OPCODE.X86.MOV \
+            and ops[0] == self.ctx.registers.edx \
+            and ops[1].getType() == OPERAND.MEM \
+            and ops[1].getBaseRegister() == self.VSP \
+            and ops[1].getDisplacement().getValue() == 0:
+                is_mov_high_vsp = True
+            if opcode == OPCODE.X86.MOV \
+            and ops[0].getType() == OPERAND.REG \
+            and ops[0].getBitSize() == 32 \
+            and ops[1].getType() == OPERAND.MEM \
+            and ops[1].getBaseRegister() == self.VSP \
+            and ops[1].getDisplacement().getValue() == 0x08:
+                deliter = ops[0]
+                is_mov_del_vsp_8 = True
+            if opcode == OPCODE.X86.SUB \
+            and ops[0] == self.VSP \
+            and ops[1].getType() == OPERAND.IMM \
+            and ops[1].getValue() == 0x04:
+                is_sub_vsp_4 = True
+            if opcode == OPCODE.X86.DIV \
+            and ops[0] == deliter:
+                is_div_del = True
+            if opcode == OPCODE.X86.MOV \
+            and ops[0].getType() == OPERAND.MEM \
+            and ops[1].getType() == OPERAND.REG \
+            and ops[0].getBaseRegister() == self.VSP \
+            and ops[0].getDisplacement().getValue() == 0x08 \
+            and ops[1] == self.ctx.registers.edx:
+                is_mov_vsp_8 = True
+            if opcode == OPCODE.X86.MOV \
+            and ops[0].getType() == OPERAND.MEM \
+            and ops[1].getType() == OPERAND.REG \
+            and ops[0].getBaseRegister() == self.VSP \
+            and ops[0].getDisplacement().getValue() == 0x0c \
+            and ops[1] == self.ctx.registers.eax:
+                is_mov_vsp_0xc = True
+            if opcode == OPCODE.X86.PUSHFQ:
+                is_pushfq = True
+            if opcode == OPCODE.X86.POP \
+            and ops[0].getType() == OPERAND.MEM \
+            and ops[0].getBaseRegister() == self.VSP:
+                is_pop_vsp = True
+        if is_pop_vsp and is_pushfq and is_mov_vsp_0xc \
+        and is_mov_vsp_8 and is_div_del and is_sub_vsp_4 \
+        and is_mov_del_vsp_8 and is_mov_high_vsp and is_mov_low_vsp_4:
+            self.fetch_values['VDIVD'].append(attach_address)
+            return True
+        return False
+    #
     def find_VRDTSC(self,bb):
         is_rdtsc = False
         is_mov_vsp_edx = False
@@ -1340,8 +1412,75 @@ class VmpAnalyzerX64:
             return True
         return False
     #
+    def find_VMULD(self,bb):
+        is_mov_eax_vsp_4 = False
+        is_mov_edx_vsp = False
+        is_sub_vsp_8 = False
+        is_mul_edx = False
+        is_mov_vsp_8_edx = False
+        is_mov_vsp_c_eax = False
+        is_pushfq = False
+        is_pop_vsp = False
+        attach_address = bb.getInstructions()[0].getAddress()
+        for insn in bb.getInstructions():
+            opcode = insn.getType()
+            ops = insn.getOperands()
+            if opcode == OPCODE.X86.MOV \
+            and ops[0].getType() == OPERAND.REG \
+            and ops[0].getBitSize() == 32 \
+            and ops[1].getType() == OPERAND.MEM \
+            and ops[1].getBaseRegister() == self.VSP \
+            and ops[1].getDisplacement().getValue() == 0x04:
+                is_mov_eax_vsp_4 = True
+            if opcode == OPCODE.X86.MOV \
+            and ops[0].getType() == OPERAND.REG \
+            and ops[0].getBitSize() == 32 \
+            and ops[1].getType() == OPERAND.MEM \
+            and ops[1].getBaseRegister() == self.VSP \
+            and ops[1].getDisplacement().getValue() == 0x00:
+                is_mov_edx_vsp = True
+            if opcode == OPCODE.X86.SUB \
+            and ops[0] == self.VSP \
+            and ops[1].getType() == OPERAND.IMM \
+            and ops[1].getValue() == 0x08:
+                is_sub_vsp_8 = True
+            if opcode == OPCODE.X86.MUL \
+            and ops[0] == self.ctx.registers.edx:
+                is_mul_edx = True
+            if opcode == OPCODE.X86.MOV \
+            and ops[0].getType() == OPERAND.MEM \
+            and ops[0].getBaseRegister() == self.VSP \
+            and ops[0].getDisplacement().getValue() == 0x08 \
+            and ops[1].getType() == OPERAND.REG \
+            and ops[1].getBitSize() == 32 \
+            and ops[1] == self.ctx.registers.edx:
+                is_mov_vsp_8_edx = True
+            if opcode == OPCODE.X86.MOV \
+            and ops[0].getType() == OPERAND.MEM \
+            and ops[0].getBaseRegister() == self.VSP \
+            and ops[0].getDisplacement().getValue() == 0x0c \
+            and ops[1].getType() == OPERAND.REG \
+            and ops[1].getBitSize() == 32 \
+            and ops[1] == self.ctx.registers.eax:
+                is_mov_vsp_c_eax = True
+            if opcode == OPCODE.X86.PUSHFQ:
+                is_pushfq = True
+            if opcode == OPCODE.X86.POP \
+            and ops[0].getType() == OPERAND.MEM \
+            and ops[0].getBaseRegister() == self.VSP:
+                is_pop_vsp = True
+        if is_pop_vsp and is_pushfq and is_mov_vsp_c_eax \
+        and is_mov_vsp_8_edx and is_mul_edx \
+        and is_sub_vsp_8 and is_mov_edx_vsp \
+        and is_mov_eax_vsp_4:
+            self.fetch_values['VMULD'].append(attach_address)
+            return True
+        return False
+    #
     def analyze_vmops(self,bb):
         analyzers = [
+            self.find_VMULD,
+            self.find_VDIVD,
             self.find_VRDTSC,
             self.find_VPOPB,
             self.find_VHADDB,
@@ -1377,9 +1516,10 @@ class VmpAnalyzerX64:
             return True
         if not self.analyze_vmops(bb):
             print("[-] not found vmp handler, please append vmp template handler")
-            bb = self.ctx.simplify(bb)
-            bb = BasicBlock([bb.getInstructions()[-1]]+bb.getInstructions()[:-1])
-            print("handler code:",bb,sep="\n\n")
+            print("handler code at address: %x" % bb.getInstructions()[0].getAddress())
+            bb_simp = self.ctx.simplify(bb)
+            bb_simp = BasicBlock([bb_simp.getInstructions()[-1]]+bb_simp.getInstructions()[:-1])
+            print(bb_simp)
             exit(1)
         return False
     #
@@ -1670,7 +1810,7 @@ class VmpExtractorX64(VmpAnalyzerX64):
             if hdl(mu,address_handler):
                return
 
-vmp = VmpExtractorX64('hdl.dmp',{'start':0,'end':0xFFFFFFFFFFFFFFFF})
+vmp = VmpExtractorX64('hdl.dmp',{'start':0x140000000,'end':0x14097c000})
 vmp_bytecode = vmp.extract_bytecode()
 from miasm.analysis.machine import Machine
 from miasm.core.locationdb import LocationDB
